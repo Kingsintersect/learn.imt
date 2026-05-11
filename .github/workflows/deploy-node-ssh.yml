@@ -34,7 +34,7 @@ env:
 
   # Backend proxy — set to https://your-api.com/api/v1/ (trailing slash required).
   # Leave empty (BACKEND_URL: '') if this app has no external backend to proxy.
-  BACKEND_URL: 'https://imt-orientation-api.qverselearning.org/api/v1'
+  BACKEND_URL: 'https://imt-orientation-api.qverselearning.org/api/v1/'
 
   # Webserver that fronts this domain: nginx or apache.
   # On cPanel servers Nginx sits on port 80 in front of Apache — set nginx here
