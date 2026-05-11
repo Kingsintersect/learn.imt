@@ -3,8 +3,8 @@ module.exports = {
         name: process.env.APP_NAME || 'learn.imt.qverselearning.org',
         script: 'node_modules/.bin/next',
         args: 'start',
-        instances: 'max',
-        exec_mode: 'cluster',
+        instances: 1,
+        exec_mode: 'fork',
         // Next.js reads .env.production automatically when NODE_ENV=production.
         // PM2 only needs to set PORT and NODE_ENV here.
         env: {
