@@ -50,7 +50,7 @@ export const LogoBox = () => (
                     />
                 </div>
             </div>
-            <div className="text-xs opacity-90 mt-1">{APP_CONFIG.institution}</div>
+            <div className="text-xs opacity-90 mt-1">{APP_CONFIG.short_name}</div>
         </Link>
     </div>
 );

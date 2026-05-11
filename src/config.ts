@@ -48,6 +48,7 @@ export const FULL_TUITION_FEE = 195000;
 
 
 export const APP_CONFIG = {
+    version: "1.0.0",
     name: SITE_NAME,
     short_name: SITE_SHORT_NAME,
     apiUrl: remoteApiUrl,

@@ -98,23 +98,31 @@ done
 
 # ── Write .env.production (app-scoped, mode 600) ─────────────────────────────
 # Next.js reads this file automatically when NODE_ENV=production.
-# AUTH_SECRET and NEXTAUTH_SECRET are required at runtime by NextAuth.
-cat > "${ENV_FILE}" <<ENVEOF
+# Preferred: CI uploads .env.production (via DEV_ENV_FILE secret) before this
+#            script runs — detected below and used as-is.
+# Fallback:  individual secrets passed as env vars (legacy CI pattern).
+if [[ -f "${ENV_FILE}" ]]; then
+    echo "✅ .env.production already present (uploaded by CI)"
+    # Ensure PORT and NODE_ENV are present (add if the uploaded file omits them)
+    grep -q "^PORT="     "${ENV_FILE}" || echo "PORT=${APP_PORT}"      >> "${ENV_FILE}"
+    grep -q "^NODE_ENV=" "${ENV_FILE}" || echo "NODE_ENV=production"   >> "${ENV_FILE}"
+else
+    cat > "${ENV_FILE}" <<ENVEOF
 PORT=${APP_PORT}
 NODE_ENV=production
 ENVEOF
+    # Append runtime secrets injected by CI/CD via environment variables (legacy)
+    printenv | grep -E '^(AUTH_SECRET=|NEXTAUTH_|NEXT_PUBLIC_)' >> "${ENV_FILE}" 2>/dev/null || true
 
-# Append runtime secrets injected by CI/CD via environment variables
-printenv | grep -E '^(AUTH_SECRET=|NEXTAUTH_|NEXT_PUBLIC_)' >> "${ENV_FILE}" 2>/dev/null || true
-
-# Derive NEXTAUTH_SECRET from AUTH_SECRET when not explicitly set
-if grep -q "^AUTH_SECRET=" "${ENV_FILE}" && ! grep -q "^NEXTAUTH_SECRET=" "${ENV_FILE}"; then
-    _auth_val=$(grep "^AUTH_SECRET=" "${ENV_FILE}" | cut -d'=' -f2-)
-    echo "NEXTAUTH_SECRET=${_auth_val}" >> "${ENV_FILE}"
+    # Derive NEXTAUTH_SECRET from AUTH_SECRET when not explicitly set
+    if grep -q "^AUTH_SECRET=" "${ENV_FILE}" && ! grep -q "^NEXTAUTH_SECRET=" "${ENV_FILE}"; then
+        _auth_val=$(grep "^AUTH_SECRET=" "${ENV_FILE}" | cut -d'=' -f2-)
+        echo "NEXTAUTH_SECRET=${_auth_val}" >> "${ENV_FILE}"
+    fi
+    echo "✅ .env.production written"
 fi
 
 chmod 600 "${ENV_FILE}"
-echo "✅ .env.production written"
 
 # ── Detect environment ────────────────────────────────────────────────────────
 # Determines: (1) which web server owns port 80, (2) whether this is cPanel.

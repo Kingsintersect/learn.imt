@@ -28,6 +28,7 @@ export default function ProtectedRoute({ children, allowedRoles }: ProtectedRout
             const roleRoutes = {
                 [UserRole.ADMIN]: '/admin/dashboard',
                 [UserRole.MANAGER]: '/admin/dashboard',
+                [UserRole.DIRECTOR]: '/admin/dashboard',
                 [UserRole.TEACHER]: '/teacher/dashboard',
                 [UserRole.PARENT]: '/parent/dashboard',
                 [UserRole.STUDENT]: '/student/dashboard',

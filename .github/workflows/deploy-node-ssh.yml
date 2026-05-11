@@ -13,8 +13,8 @@ on:
 # To reuse this workflow in another repo:
 #   1. Copy this file unchanged.
 #   2. Edit the values below (the env block).
-#   3. Update the NEXT_PUBLIC_* vars in the build step to match your app.
-#   4. Set the required secrets in GitHub → Settings → Secrets and variables.
+#   3. Create one GitHub secret DEV_ENV_FILE with the full contents of .env.production.
+#   4. Set the required SSH secrets in GitHub → Settings → Secrets and variables.
 #
 # Required secrets (same for every app on the same server):
 #   DEPLOY_SSH_PRIVATE_KEY  — private key whose public key is in ~/.ssh/authorized_keys
@@ -22,9 +22,8 @@ on:
 #   DEPLOY_SSH_PORT         — SSH port (usually 22)
 #   DEPLOY_SSH_USER         — SSH login username
 #
-# App-specific secrets (add/rename to match your app):
-#   AUTH_SECRET             — NextAuth / auth library secret
-#   NEXT_PUBLIC_*           — any public env vars baked into the build
+# App-specific secrets (one secret covers all env vars):
+#   DEV_ENV_FILE            — full contents of .env.production (all runtime + build-time vars)
 # ─────────────────────────────────────────────────────────────────────────────
 env:
   # ── App identity (change these for each application) ────────────────────────
@@ -35,7 +34,7 @@ env:
 
   # Backend proxy — set to https://your-api.com/api/v1/ (trailing slash required).
   # Leave empty (BACKEND_URL: '') if this app has no external backend to proxy.
-  BACKEND_URL: 'https://imt-orientation-api.qverselearning.org/api/v1/'
+  BACKEND_URL: 'https://imt-orientation-api.qverselearning.org/api/v1'
 
   # Webserver that fronts this domain: nginx or apache.
   # On cPanel servers Nginx sits on port 80 in front of Apache — set nginx here
@@ -65,20 +64,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # NEXT_PUBLIC_* vars are baked into the bundle at build time.
-      # They do NOT need to exist on the server at runtime.
-      #
-      # CONFIGURE: add/remove NEXT_PUBLIC_* lines below to match your app's
-      # build-time public variables. The names must match your GitHub secrets.
+      # All build-time vars (NEXT_PUBLIC_* etc.) come from the DEV_ENV_FILE secret.
+      # Writing it to .env.production lets Next.js pick them up during the build.
       - name: Build application
         env:
-          NEXT_PUBLIC_API_URL: ${{ secrets.NEXT_PUBLIC_API_URL }}
-          NEXT_PUBLIC_BASE_URL: ${{ secrets.NEXT_PUBLIC_BASE_URL }}
-          NEXT_PUBLIC_LMS_BASE_URL: ${{ secrets.NEXT_PUBLIC_LMS_BASE_URL }}
-          NEXT_PUBLIC_STORAGE_URL: ${{ secrets.NEXT_PUBLIC_STORAGE_URL }}
-          NEXT_PUBLIC_SESSION_SECRET: ${{ secrets.NEXT_PUBLIC_SESSION_SECRET }}
-          NEXT_PUBLIC_SESSION_PASSWORD: ${{ secrets.NEXT_PUBLIC_SESSION_PASSWORD }}
-        run: npm run build
+          APP_ENV_FILE: ${{ secrets.DEV_ENV_FILE }}
+        run: |
+          printf '%s\n' "${APP_ENV_FILE}" > .env.production
+          npm run build
 
       # Archive contains everything the server needs.
       # node_modules is intentionally excluded — npm ci runs on the server.
@@ -109,7 +102,8 @@ jobs:
 #   1. Transfer archive to server home directory
 #   2. Extract archive into app directory (scripts become available)
 #   3. Bootstrap VPS (idempotent — skips already-installed tools)
-#   4. Run deploy script (scoped to this app only)
+#   4. Upload .env.production from DEV_ENV_FILE secret
+#   5. Run deploy script (scoped to this app only)
 # ─────────────────────────────────────────────────────────────────────────────
   deploy:
     needs: build
@@ -133,25 +127,29 @@ jobs:
         with:
           ssh-private-key: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
 
-      - name: Add server to known hosts
+      # Register the server once as a named host alias "vps".
+      # All subsequent ssh/scp commands use "vps" — no repeated host/port/user.
+      # The private key is already loaded by the SSH agent above.
+      - name: Configure SSH host alias
         run: |
           mkdir -p ~/.ssh
           ssh-keyscan -p ${{ secrets.DEPLOY_SSH_PORT }} \
             ${{ secrets.DEPLOY_SSH_HOST }} >> ~/.ssh/known_hosts
+          cat >> ~/.ssh/config <<EOF
+          Host vps
+            HostName ${{ secrets.DEPLOY_SSH_HOST }}
+            Port     ${{ secrets.DEPLOY_SSH_PORT }}
+            User     ${{ secrets.DEPLOY_SSH_USER }}
+          EOF
 
       # ── Step 1: Transfer archive ────────────────────────────────────────────
       - name: Transfer archive to server
-        run: |
-          scp -P ${{ secrets.DEPLOY_SSH_PORT }} \
-            next-deploy.tar.gz \
-            ${{ secrets.DEPLOY_SSH_USER }}@${{ secrets.DEPLOY_SSH_HOST }}:~
+        run: scp next-deploy.tar.gz vps:~
 
       # ── Step 2: Extract archive so scripts/ is available ───────────────────
       - name: Extract archive on server
         run: |
-          ssh -p ${{ secrets.DEPLOY_SSH_PORT }} \
-            ${{ secrets.DEPLOY_SSH_USER }}@${{ secrets.DEPLOY_SSH_HOST }} \
-            "mkdir -p ${{ env.APP_DIR }} && \
+          ssh vps "mkdir -p ${{ env.APP_DIR }} && \
              tar -xzf ~/next-deploy.tar.gz -C ${{ env.APP_DIR }} && \
              rm -f ~/next-deploy.tar.gz && \
              chmod +x ${{ env.APP_DIR }}/scripts/bootstrap-vps.sh \
@@ -159,34 +157,23 @@ jobs:
 
       # ── Step 3: Bootstrap VPS (idempotent — safe to run on every deploy) ───
       # Installs Node/PM2/Nginx/Certbot only if missing. Warns on port conflicts.
-      # Does NOT install anything if already present.
       - name: Bootstrap VPS
-        run: |
-          ssh -p ${{ secrets.DEPLOY_SSH_PORT }} \
-            ${{ secrets.DEPLOY_SSH_USER }}@${{ secrets.DEPLOY_SSH_HOST }} \
-            "bash ${{ env.APP_DIR }}/scripts/bootstrap-vps.sh \
-               ${{ secrets.DEPLOY_SSH_USER }}"
+        run: ssh vps "bash ${{ env.APP_DIR }}/scripts/bootstrap-vps.sh ${{ secrets.DEPLOY_SSH_USER }}"
 
-      # ── Step 4: Deploy app (scoped to this app only) ────────────────────────
-      # Runtime secrets are passed as env vars so deploy-server.sh can write
-      # .env.production on the server. NEXT_PUBLIC_* vars are already baked into
-      # the build — passing them here is optional but harmless.
-      #
-      # CONFIGURE: add/remove NEXT_PUBLIC_* lines below to match your app's
-      # runtime secrets. The variable names must match your GitHub secrets.
+      # ── Step 4: Upload env file to server ──────────────────────────────────
+      # Writes DEV_ENV_FILE secret as .env.production directly in APP_DIR.
+      # deploy-server.sh detects the file and skips re-writing it.
+      - name: Upload env file to server
+        env:
+          APP_ENV_FILE: ${{ secrets.DEV_ENV_FILE }}
+        run: |
+          printf '%s\n' "${APP_ENV_FILE}" > .env.production
+          scp .env.production vps:${{ env.APP_DIR }}/.env.production
+
+      # ── Step 5: Deploy app (scoped to this app only) ────────────────────────
       - name: Deploy application
         run: |
-          ssh -p ${{ secrets.DEPLOY_SSH_PORT }} \
-            ${{ secrets.DEPLOY_SSH_USER }}@${{ secrets.DEPLOY_SSH_HOST }} \
-            "AUTH_SECRET='${{ secrets.AUTH_SECRET }}' \
-             NEXTAUTH_URL='${{ secrets.NEXTAUTH_URL }}' \
-             NEXT_PUBLIC_API_URL='${{ secrets.NEXT_PUBLIC_API_URL }}' \
-             NEXT_PUBLIC_BASE_URL='${{ secrets.NEXT_PUBLIC_BASE_URL }}' \
-             NEXT_PUBLIC_LMS_BASE_URL='${{ secrets.NEXT_PUBLIC_LMS_BASE_URL }}' \
-             NEXT_PUBLIC_STORAGE_URL='${{ secrets.NEXT_PUBLIC_STORAGE_URL }}' \
-             NEXT_PUBLIC_SESSION_SECRET='${{ secrets.NEXT_PUBLIC_SESSION_SECRET }}' \
-             NEXT_PUBLIC_SESSION_PASSWORD='${{ secrets.NEXT_PUBLIC_SESSION_PASSWORD }}' \
-             bash ${{ env.APP_DIR }}/scripts/deploy-server.sh \
+          ssh vps "bash ${{ env.APP_DIR }}/scripts/deploy-server.sh \
                '${{ env.APP_DIR }}' \
                '${{ env.APP_NAME }}' \
                '${{ env.APP_PORT }}' \
